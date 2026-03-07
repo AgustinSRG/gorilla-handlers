@@ -1,5 +1,5 @@
-module github.com/gorilla/handlers
+module github.com/AgustinSRG/gorilla-handlers
 
-go 1.20
+go 1.23
 
-require github.com/felixge/httpsnoop v1.0.3
+require github.com/felixge/httpsnoop v1.0.4
