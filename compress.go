@@ -19,18 +19,41 @@ const acceptEncoding string = "Accept-Encoding"
 type compressResponseWriter struct {
 	compressor io.Writer
 	w          http.ResponseWriter
+	encoding   string
 }
 
 func (cw *compressResponseWriter) WriteHeader(c int) {
+	h := cw.w.Header()
+
+	// Go 1.23 introduced a breaking change makes it so Content-Encoding is deleted under certain conditions
+	// For example if an error floats out of ServeContent (https://pkg.go.dev/net/http@master#ServeContent)
+	// See also:
+	//		https://github.com/golang/go/issues/66343
+	// 		https://github.com/golang/go/issues/71149
+	// 		https://tip.golang.org/doc/go1.23#language
+	//
+	// If Content-Encoding is missing, add it back in
+	if h.Get("Content-Encoding") == "" {
+		h.Set("Content-Encoding", cw.encoding)
+	}
+
 	cw.w.Header().Del("Content-Length")
 	cw.w.WriteHeader(c)
 }
 
 func (cw *compressResponseWriter) Write(b []byte) (int, error) {
 	h := cw.w.Header()
+
+	// If Content-Encoding is missing, return an uncompressed response
+	// This can happen starting with Go 1.23 if an error floats out of ServeContent(https://pkg.go.dev/net/http@master#ServeContent)
+	if h.Get("Content-Encoding") == "" {
+		return cw.w.Write(b)
+	}
+
 	if h.Get("Content-Type") == "" {
 		h.Set("Content-Type", http.DetectContentType(b))
 	}
+
 	h.Del("Content-Length")
 
 	return cw.compressor.Write(b)
@@ -108,9 +131,10 @@ func CompressHandlerLevel(h http.Handler, level int) http.Handler {
 
 		// wrap the ResponseWriter with the writer for the chosen encoding
 		var encWriter io.WriteCloser
-		if encoding == gzipEncoding {
+		switch encoding {
+		case gzipEncoding:
 			encWriter, _ = gzip.NewWriterLevel(w, level)
-		} else if encoding == flateEncoding {
+		case flateEncoding:
 			encWriter, _ = flate.NewWriter(w, level)
 		}
 		defer encWriter.Close()
@@ -121,6 +145,7 @@ func CompressHandlerLevel(h http.Handler, level int) http.Handler {
 		cw := &compressResponseWriter{
 			w:          w,
 			compressor: encWriter,
+			encoding:   encoding,
 		}
 
 		w = httpsnoop.Wrap(w, httpsnoop.Hooks{
